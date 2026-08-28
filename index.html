@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Aline Nails</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Jost:wght@400;500;600&display=swap');
+  body { font-family: 'Jost', sans-serif; background:#F7F2EA; color:#33312C; }
+  .serif { font-family: 'Cormorant Garamond', serif; }
+</style>
+</head>
+<body>
+<div id="app" class="min-h-screen"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc,
+  updateDoc, deleteDoc, onSnapshot
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import {
+  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
+  updatePassword, EmailAuthProvider, reauthenticateWithCredential
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+// ======================================================
+// CONFIGURAÇÃO DO FIREBASE
+// Troque pelos dados do SEU projeto (Configurações do
+// projeto > Geral > Seus apps > Config do SDK, no console
+// do Firebase).
+// ======================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyCcdzmF2Hc0mtr6gYJltW3_rnZ5wc3he58",
+  authDomain: "aline-nails-611f4.firebaseapp.com",
+  projectId: "aline-nails-611f4",
+  storageBucket: "aline-nails-611f4.firebasestorage.app",
+  messagingSenderId: "370625665500",
+  appId: "1:370625665500:web:d5f832d5e15923781ed719",
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+const auth = getAuth(firebaseApp);
+
+const WHATSAPP_NUMBER = '5561985103763';
+const INSTAGRAM_HANDLE = 'alinexnails';
+const FAKE_EMAIL_DOMAIN = 'alinenails.local';
+
+function usuarioParaEmail(usuario) {
+  return `${usuario.trim().toLowerCase().replace(/\s+/g, '')}@${FAKE_EMAIL_DOMAIN}`;
+}
+
+const DEFAULT_PRECOS = [
+  { nome: 'Manicure tradicional', preco: 35, promo: false, precoPromo: null },
+  { nome: 'Pedicure tradicional', preco: 40, promo: false, precoPromo: null },
+  { nome: 'Alongamento em fibra de vidro', preco: 130, promo: false, precoPromo: null },
+  { nome: 'Manutenção fibra de vidro', preco: 90, promo: false, precoPromo: null },
+  { nome: 'Nail art (por unha)', preco: 5, promo: false, precoPromo: null },
+];
+
+const NAV = [
+  { id: 'inicio', label: 'Início' },
+  { id: 'precos', label: 'Preços' },
+  { id: 'catalogo', label: 'Catálogo' },
+  { id: 'agendar', label: 'Agendar' },
+  { id: 'agenda', label: 'Agenda' },
+  { id: 'admin', label: 'Área da Aline' },
+];
+
+const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const DIAS_SEMANA = ['D','S','T','Q','Q','S','S'];
+const SWATCHES = ['#C9A6A0', '#E4D3B8', '#8E9B82', '#7A3B41', '#B08D57', '#33312C'];
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+function generateSlots() {
+  const slots = [];
+  for (let h = 8; h <= 20; h++) {
+    for (let m = 0; m < 60; m += 30) {
+      if (h === 20 && m > 0) continue;
+      slots.push(`${pad(h)}:${pad(m)}`);
+    }
+  }
+  return slots;
+}
+const SLOTS = generateSlots();
+
+function formatDateBR(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+
+function buildMonthGrid(year, month) {
+  const firstDay = new Date(year, month, 1);
+  const startWeekday = firstDay.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(`${year}-${pad(month + 1)}-${pad(d)}`);
+  return cells;
+}
+
+function esc(str) {
+  return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function waLink(ag) {
+  const msg = `Olá Aline! Me chamo ${ag.nome}, pré-agendei um horário para ${formatDateBR(ag.data)} às ${ag.horario}. Poderia confirmar?`;
+  return `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(msg)}`;
+}
+
+// ======================================================
+// ESTADO
+// ======================================================
+const hoje = new Date();
+const state = {
+  tab: 'inicio',
+  loading: true,
+  precos: [],
+  agendamentos: [],
+  catalogo: [],
+  adminOn: false,
+  adminTab: 'agenda',
+  bookedInfo: null,
+  bookError: '',
+  booking: false,
+  passError: '',
+  precoError: '',
+  catalogError: '',
+  catalogSaving: false,
+  senhaError: '',
+  senhaSucesso: '',
+  formNome: '',
+  formTelefone: '',
+  formData: '',
+  formHorario: '',
+  calYear: hoje.getFullYear(),
+  calMonth: hoje.getMonth(),
+  diaSelecionado: todayISO(),
+};
+
+const appEl = document.getElementById('app');
+
+// ======================================================
+// RENDER
+// ======================================================
+function render() {
+  appEl.innerHTML = `
+    ${renderHeader()}
+    <main class="max-w-4xl mx-auto px-5 py-8">
+      ${state.loading ? '<p class="text-sm text-[#766F63]">Carregando...</p>' : renderTab()}
+    </main>
+    ${renderFooter()}
+  `;
+}
+
+function renderHeader() {
+  return `
+  <header class="sticky top-0 z-20 bg-[#F7F2EA]/95 backdrop-blur border-b border-[#B08D57]/25">
+    <div class="max-w-4xl mx-auto px-5 py-4 flex items-center justify-between gap-3">
+      <div>
+        <h1 class="text-2xl tracking-[0.15em] serif">ALINE NAILS</h1>
+        <p class="text-[11px] tracking-wide text-[#766F63] -mt-1">Manicure. Nail Art. Cuidado.</p>
+      </div>
+      <a href="https://instagram.com/${INSTAGRAM_HANDLE}" target="_blank" rel="noopener noreferrer"
+         class="flex items-center gap-1.5 text-xs text-[#5c574d] border border-[#B08D57]/40 rounded-full px-3 py-1.5 hover:border-[#B08D57] shrink-0">
+        @${INSTAGRAM_HANDLE}
+      </a>
+    </div>
+    <nav class="max-w-4xl mx-auto px-5 pb-3 flex gap-1 overflow-x-auto">
+      ${NAV.map((n) => `
+        <button data-action="set-tab" data-tab="${n.id}"
+          class="whitespace-nowrap px-3 py-1.5 text-xs tracking-wide rounded-full border transition-colors ${state.tab === n.id ? 'bg-[#33312C] text-[#F7F2EA] border-[#33312C]' : 'border-[#B08D57]/40 text-[#5c574d]'}">
+          ${n.label}
+        </button>`).join('')}
+    </nav>
+  </header>`;
+}
+
+function renderFooter() {
+  return `
+  <footer class="max-w-4xl mx-auto px-5 py-8 text-center text-xs text-[#9a9282] flex flex-col items-center gap-2">
+    <a href="https://instagram.com/${INSTAGRAM_HANDLE}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 text-[#B08D57] hover:underline">
+      @${INSTAGRAM_HANDLE}
+    </a>
+    <span>Aline Nails · Valparaíso de Goiás</span>
+  </footer>`;
+}
+
+function renderTab() {
+  switch (state.tab) {
+    case 'inicio': return renderInicio();
+    case 'precos': return renderPrecos();
+    case 'catalogo': return renderCatalogo();
+    case 'agendar': return renderAgendar();
+    case 'agenda': return renderAgendaPublica();
+    case 'admin': return renderAdmin();
+    default: return '';
+  }
+}
+
+function renderInicio() {
+  return `
+  <section>
+    <div class="rounded-2xl border border-[#B08D57]/30 bg-white/60 px-6 py-10 text-center">
+      <p class="text-xs tracking-[0.25em] text-[#B08D57] mb-3">ESPECIALISTA EM FIBRA DE VIDRO</p>
+      <h2 class="text-4xl sm:text-5xl mb-4 serif">Unhas com cuidado de verdade</h2>
+      <p class="text-[#5c574d] max-w-md mx-auto mb-7">Manicure, pedicure e nail art em Valparaíso de Goiás. Escolha seu horário e a Aline confirma com você.</p>
+      <button data-action="set-tab" data-tab="agendar" class="inline-block border border-[#B08D57] px-8 py-3 text-sm tracking-[0.2em] hover:bg-[#B08D57] hover:text-white transition-colors">AGENDAR AGORA</button>
+    </div>
+    <div class="flex justify-center gap-3 my-10">
+      ${SWATCHES.map((c) => `<span class="w-6 h-6 rounded-full border border-black/10" style="background-color:${c}"></span>`).join('')}
+    </div>
+    <div class="grid sm:grid-cols-3 gap-4 text-center">
+      <div class="p-5"><p class="text-xs tracking-widest text-[#B08D57] mb-1">1</p><p class="serif text-lg">Escolha o serviço</p><p class="text-sm text-[#766F63] mt-1">Veja a tabela de preços e promoções ativas.</p></div>
+      <div class="p-5"><p class="text-xs tracking-widest text-[#B08D57] mb-1">2</p><p class="serif text-lg">Pré-agende</p><p class="text-sm text-[#766F63] mt-1">Informe nome, telefone, data e horário.</p></div>
+      <div class="p-5"><p class="text-xs tracking-widest text-[#B08D57] mb-1">3</p><p class="serif text-lg">Aguarde a confirmação</p><p class="text-sm text-[#766F63] mt-1">A Aline confirma pelo WhatsApp e o horário fica verde.</p></div>
+    </div>
+  </section>`;
+}
+
+function renderPrecos() {
+  if (state.precos.length === 0) {
+    return `<h2 class="text-3xl mb-1 serif">Tabela de preços</h2><p class="text-sm text-[#766F63]">Nenhum preço cadastrado ainda.</p>`;
+  }
+  return `
+  <section>
+    <h2 class="text-3xl mb-1 serif">Tabela de preços</h2>
+    <p class="text-sm text-[#766F63] mb-6">Valores sujeitos a alteração conforme o serviço.</p>
+    <div class="divide-y divide-[#B08D57]/20 border-y border-[#B08D57]/20">
+      ${state.precos.map((p) => `
+        <div class="flex items-center justify-between py-4">
+          <span class="serif text-lg">${esc(p.nome)}</span>
+          <span class="flex items-center gap-2">
+            ${p.promo && p.precoPromo != null
+              ? `<span class="text-sm text-[#766F63] line-through">R$ ${Number(p.preco).toFixed(2)}</span>
+                 <span class="text-base font-medium text-[#7A3B41]">R$ ${Number(p.precoPromo).toFixed(2)}</span>`
+              : `<span class="text-base">R$ ${Number(p.preco).toFixed(2)}</span>`}
+          </span>
+        </div>`).join('')}
+    </div>
+  </section>`;
+}
+
+function renderCatalogo() {
+  return `
+  <section>
+    <h2 class="text-3xl mb-1 serif">Catálogo</h2>
+    <p class="text-sm text-[#766F63] mb-6">Alguns trabalhos recentes da Aline.</p>
+    ${state.catalogo.length === 0
+      ? `<p class="text-sm text-[#766F63]">O catálogo ainda não tem fotos. A Aline pode adicionar na Área da Aline.</p>`
+      : `<div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          ${state.catalogo.map((c) => `
+            <div class="rounded-lg overflow-hidden border border-[#B08D57]/20 bg-white/50">
+              <img src="${esc(c.url)}" alt="${esc(c.titulo)}" class="w-full h-36 object-cover" />
+              <p class="text-xs px-2 py-1.5 text-[#5c574d]">${esc(c.titulo)}</p>
+            </div>`).join('')}
+        </div>`}
+  </section>`;
+}
+
+function renderAgendar() {
+  if (state.bookedInfo) {
+    const b = state.bookedInfo;
+    return `
+    <section class="max-w-md">
+      <h2 class="text-3xl mb-1 serif">Agendar horário</h2>
+      <div class="border border-[#B08D57]/40 rounded-xl p-5 bg-white/60 mt-4">
+        <p class="serif text-xl mb-1">Pré-agendado!</p>
+        <p class="text-sm text-[#5c574d] mb-4">${esc(b.nome)}, seu horário de ${formatDateBR(b.data)} às ${b.horario} está
+          <span class="text-[#C08A2E] font-medium">pré-agendado</span>. Ele fica verde quando a Aline confirmar.</p>
+        <a href="${waLink(b)}" target="_blank" rel="noopener noreferrer"
+           class="inline-flex items-center gap-2 border border-[#3E7C42] text-[#3E7C42] px-5 py-2.5 text-sm hover:bg-[#3E7C42] hover:text-white transition-colors">
+           Avisar no WhatsApp
+        </a>
+        <button data-action="book-again" class="block mt-4 text-xs text-[#766F63] underline">Fazer outro agendamento</button>
+      </div>
+    </section>`;
+  }
+
+  const takenSlots = state.formData
+    ? state.agendamentos.filter((a) => a.data === state.formData && a.status !== 'cancelado').map((a) => a.horario)
+    : [];
+
+  return `
+  <section class="max-w-md">
+    <h2 class="text-3xl mb-1 serif">Agendar horário</h2>
+    <p class="text-sm text-[#766F63] mb-6">Isso cria um <span class="text-[#B08D57] font-medium">pré-agendamento</span>. A Aline confirma em seguida.</p>
+    <div class="space-y-4">
+      <div>
+        <label class="text-xs tracking-wide text-[#5c574d] block mb-1">Nome</label>
+        <input id="inp-nome" data-bind="formNome" value="${esc(state.formNome)}" placeholder="Seu primeiro nome"
+          class="w-full border border-[#B08D57]/40 bg-white/70 px-3 py-2.5 text-sm focus:outline-none focus:border-[#B08D57] rounded-md" />
+      </div>
+      <div>
+        <label class="text-xs tracking-wide text-[#5c574d] block mb-1">Telefone</label>
+        <input id="inp-telefone" data-bind="formTelefone" value="${esc(state.formTelefone)}" placeholder="(61) 90000-0000"
+          class="w-full border border-[#B08D57]/40 bg-white/70 px-3 py-2.5 text-sm focus:outline-none focus:border-[#B08D57] rounded-md" />
+      </div>
+      <div>
+        <label class="text-xs tracking-wide text-[#5c574d] block mb-1">Data</label>
+        <input id="inp-data" type="date" min="${todayISO()}" value="${esc(state.formData)}"
+          class="w-full border border-[#B08D57]/40 bg-white/70 px-3 py-2.5 text-sm focus:outline-none focus:border-[#B08D57] rounded-md" />
+      </div>
+      <div>
+        <label class="text-xs tracking-wide text-[#5c574d] block mb-1">Horário</label>
+        <div class="grid grid-cols-4 gap-2">
+          ${SLOTS.map((s) => {
+            const taken = state.formData && takenSlots.includes(s);
+            const selected = state.formHorario === s;
+            return `<button type="button" data-action="select-horario" data-horario="${s}" ${taken ? 'disabled' : ''}
+              class="text-xs py-2 rounded-md border transition-colors ${
+                taken ? 'border-[#B08D57]/15 text-[#c9c3b6] line-through cursor-not-allowed'
+                : selected ? 'bg-[#33312C] text-white border-[#33312C]' : 'border-[#B08D57]/40 text-[#5c574d]'}">${s}</button>`;
+          }).join('')}
+        </div>
+        ${!state.formData ? '<p class="text-[11px] text-[#9a9282] mt-1">Escolha a data para ver os horários livres.</p>' : ''}
+      </div>
+      ${state.bookError ? `<p class="text-sm text-[#7A3B41]">${esc(state.bookError)}</p>` : ''}
+      <button type="button" data-action="submit-book" ${state.booking ? 'disabled' : ''}
+        class="w-full border border-[#B08D57] px-8 py-3 text-sm tracking-[0.2em] hover:bg-[#B08D57] hover:text-white transition-colors disabled:opacity-50">
+        ${state.booking ? 'ENVIANDO...' : 'PRÉ-AGENDAR'}
+      </button>
+    </div>
+  </section>`;
+}
+
+function renderAgendaPublica() {
+  const cells = buildMonthGrid(state.calYear, state.calMonth);
+  const doDia = state.agendamentos.filter((a) => a.data === state.diaSelecionado);
+  return `
+  <section>
+    <h2 class="text-3xl mb-1 serif">Quem está agendado</h2>
+    <p class="text-sm text-[#766F63] mb-6">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-[#C08A2E] mr-1.5 align-middle"></span>Pré-agendado
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-[#3E7C42] mr-1.5 ml-4 align-middle"></span>Confirmado
+    </p>
+    <div class="border border-[#B08D57]/25 rounded-xl bg-white/50 p-4 max-w-sm mb-6">
+      <div class="flex items-center justify-between mb-3">
+        <button data-action="cal-prev" class="p-1 rounded-md hover:bg-[#B08D57]/10">‹</button>
+        <p class="serif text-lg">${MESES[state.calMonth]} ${state.calYear}</p>
+        <button data-action="cal-next" class="p-1 rounded-md hover:bg-[#B08D57]/10">›</button>
+      </div>
+      <div class="grid grid-cols-7 gap-1 text-center text-[10px] text-[#9a9282] mb-1">
+        ${DIAS_SEMANA.map((d) => `<span>${d}</span>`).join('')}
+      </div>
+      <div class="grid grid-cols-7 gap-1">
+        ${cells.map((iso) => {
+          if (!iso) return '<span></span>';
+          const diaAgs = state.agendamentos.filter((a) => a.data === iso && a.status !== 'cancelado');
+          const temConfirmado = diaAgs.some((a) => a.status === 'confirmado');
+          const temPre = diaAgs.some((a) => a.status !== 'confirmado');
+          const selecionado = iso === state.diaSelecionado;
+          return `<button data-action="select-dia" data-dia="${iso}"
+            class="aspect-square rounded-md text-xs flex flex-col items-center justify-center gap-0.5 border ${selecionado ? 'bg-[#33312C] text-white border-[#33312C]' : 'border-transparent hover:border-[#B08D57]/40'}">
+            <span>${parseInt(iso.slice(-2), 10)}</span>
+            ${(temPre || temConfirmado) ? `<span class="flex gap-0.5">${temPre ? '<span class="w-1 h-1 rounded-full bg-[#C08A2E]"></span>' : ''}${temConfirmado ? '<span class="w-1 h-1 rounded-full bg-[#3E7C42]"></span>' : ''}</span>` : ''}
+          </button>`;
+        }).join('')}
+      </div>
+    </div>
+    <p class="serif text-lg mb-2">${formatDateBR(state.diaSelecionado)}</p>
+    ${doDia.length === 0 ? `<p class="text-sm text-[#766F63]">Nenhum agendamento nesse dia.</p>` : `
+      <div class="space-y-2">
+        ${doDia.sort((a, b) => a.horario.localeCompare(b.horario)).map((a) => `
+          <div class="flex items-center justify-between border border-[#B08D57]/20 rounded-lg px-4 py-3 bg-white/50">
+            <span class="text-sm">${a.horario} — ${esc((a.nome || '').split(' ')[0])}</span>
+            <span class="text-xs px-2.5 py-1 rounded-full ${a.status === 'confirmado' ? 'bg-[#3E7C42]/10 text-[#3E7C42]' : 'bg-[#C08A2E]/10 text-[#C08A2E]'}">
+              ${a.status === 'confirmado' ? 'Confirmado' : 'Pré-agendado'}
+            </span>
+          </div>`).join('')}
+      </div>`}
+  </section>`;
+}
+
+function renderAdmin() {
+  if (!state.adminOn) {
+    return `
+    <section>
+      <div class="max-w-sm">
+        <h2 class="text-3xl mb-1 serif">Área da Aline</h2>
+        <p class="text-sm text-[#766F63] mb-5">Acesso restrito para gerenciar preços, catálogo e confirmar horários.</p>
+        <div class="space-y-3">
+          <input id="inp-usuario-login" type="text" placeholder="Usuário" autocapitalize="none" autocorrect="off" spellcheck="false"
+            class="w-full border border-[#B08D57]/40 bg-white/70 px-3 py-2.5 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+          <input id="inp-senha-login" type="password" placeholder="Senha" autocapitalize="none" autocorrect="off" spellcheck="false"
+            class="w-full border border-[#B08D57]/40 bg-white/70 px-3 py-2.5 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+          ${state.passError ? `<p class="text-sm text-[#7A3B41]">${esc(state.passError)}</p>` : ''}
+          <button data-action="admin-login" ${state.loggingIn ? 'disabled' : ''}
+            class="w-full border border-[#33312C] px-6 py-2.5 text-sm tracking-wide hover:bg-[#33312C] hover:text-white transition-colors disabled:opacity-50">
+            ${state.loggingIn ? 'Entrando...' : 'Entrar'}
+          </button>
+        </div>
+      </div>
+    </section>`;
+  }
+
+  return `
+  <section>
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-3xl serif">Área da Aline</h2>
+      <button data-action="admin-logout" class="text-xs text-[#766F63] underline">Sair</button>
+    </div>
+    <div class="flex gap-2 mb-6 flex-wrap">
+      ${[{ id: 'agenda', label: 'Agenda' }, { id: 'precos', label: 'Preços' }, { id: 'catalogo', label: 'Catálogo' }, { id: 'senha', label: 'Senha' }]
+        .map((s) => `<button data-action="set-admin-tab" data-admin-tab="${s.id}"
+          class="px-3 py-1.5 text-xs rounded-full border ${state.adminTab === s.id ? 'bg-[#33312C] text-white border-[#33312C]' : 'border-[#B08D57]/40 text-[#5c574d]'}">${s.label}</button>`).join('')}
+    </div>
+    ${state.adminTab === 'agenda' ? renderAdminAgenda() : ''}
+    ${state.adminTab === 'precos' ? renderAdminPrecos() : ''}
+    ${state.adminTab === 'catalogo' ? renderAdminCatalogo() : ''}
+    ${state.adminTab === 'senha' ? renderAdminSenha() : ''}
+  </section>`;
+}
+
+function renderAdminAgenda() {
+  if (state.agendamentos.length === 0) return `<p class="text-sm text-[#766F63]">Nenhum agendamento ainda.</p>`;
+  const lista = [...state.agendamentos].sort((a, b) => (a.data + a.horario).localeCompare(b.data + b.horario));
+  return `
+  <div class="space-y-2">
+    ${lista.map((a) => `
+      <div class="border border-[#B08D57]/20 rounded-lg px-4 py-3 bg-white/50">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <p class="text-sm font-medium">${esc(a.nome)}</p>
+            <p class="text-xs text-[#766F63]">${formatDateBR(a.data)} às ${a.horario} · ${esc(a.telefone)}</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs px-2.5 py-1 rounded-full ${a.status === 'confirmado' ? 'bg-[#3E7C42]/10 text-[#3E7C42]' : 'bg-[#C08A2E]/10 text-[#C08A2E]'}">
+              ${a.status === 'confirmado' ? 'Confirmado' : 'Pré-agendado'}
+            </span>
+            ${a.status !== 'confirmado' ? `<button data-action="confirm-agendamento" data-id="${a.id}" title="Confirmar"
+              class="p-1.5 rounded-md border border-[#3E7C42]/40 text-[#3E7C42] hover:bg-[#3E7C42] hover:text-white">✓</button>` : ''}
+            <a href="${waLink(a)}" target="_blank" rel="noopener noreferrer" title="WhatsApp"
+              class="p-1.5 rounded-md border border-[#B08D57]/40 text-[#B08D57] hover:bg-[#B08D57] hover:text-white">↗</a>
+            <button data-action="delete-agendamento" data-id="${a.id}" title="Remover"
+              class="p-1.5 rounded-md border border-[#7A3B41]/40 text-[#7A3B41] hover:bg-[#7A3B41] hover:text-white">✕</button>
+          </div>
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function renderAdminPrecos() {
+  return `
+  <div>
+    <div class="flex flex-wrap gap-2 mb-2">
+      <input id="inp-novo-produto" placeholder="Nome do serviço"
+        class="flex-1 min-w-[160px] border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+      <input id="inp-novo-preco" type="number" step="0.01" placeholder="Preço"
+        class="w-28 border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+      <button data-action="add-preco" class="flex items-center gap-1 border border-[#33312C] px-3 py-2 text-sm hover:bg-[#33312C] hover:text-white">+ Adicionar</button>
+    </div>
+    ${state.precoError ? `<p class="text-xs text-[#7A3B41] mb-3">${esc(state.precoError)}</p>` : ''}
+    <div class="space-y-2">
+      ${state.precos.map((p) => `
+        <div class="border border-[#B08D57]/20 rounded-lg px-4 py-3 bg-white/50">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <span class="text-sm font-medium">${esc(p.nome)}</span>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-[#766F63]">R$</span>
+              <input type="number" step="0.01" value="${p.preco}" data-change-action="update-preco-valor" data-id="${p.id}"
+                class="w-20 border border-[#B08D57]/30 bg-white px-2 py-1 text-sm rounded-md" />
+              <label class="flex items-center gap-1 text-xs text-[#5c574d] ml-2">
+                <input type="checkbox" data-change-action="toggle-promo" data-id="${p.id}" ${p.promo ? 'checked' : ''} /> Promoção
+              </label>
+              ${p.promo ? `<input type="number" step="0.01" placeholder="preço promo" value="${p.precoPromo ?? ''}" data-change-action="update-preco-promo" data-id="${p.id}"
+                class="w-24 border border-[#7A3B41]/30 bg-white px-2 py-1 text-sm rounded-md" />` : ''}
+              <button data-action="delete-preco" data-id="${p.id}" class="p-1.5 rounded-md border border-[#7A3B41]/40 text-[#7A3B41] hover:bg-[#7A3B41] hover:text-white">✕</button>
+            </div>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function renderAdminCatalogo() {
+  return `
+  <div>
+    <div class="flex flex-wrap gap-2 mb-2">
+      <input id="inp-foto-url" placeholder="Link da foto (URL)"
+        class="flex-1 min-w-[180px] border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+      <input id="inp-foto-titulo" placeholder="Descrição (opcional)"
+        class="w-40 border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+      <button data-action="add-catalogo" ${state.catalogSaving ? 'disabled' : ''}
+        class="flex items-center gap-1 border border-[#33312C] px-3 py-2 text-sm hover:bg-[#33312C] hover:text-white disabled:opacity-50">
+        ${state.catalogSaving ? 'Salvando...' : 'Adicionar'}
+      </button>
+    </div>
+    ${state.catalogError ? `<p class="text-xs text-[#7A3B41] mb-3">${esc(state.catalogError)}</p>` : ''}
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      ${state.catalogo.map((c) => `
+        <div class="rounded-lg overflow-hidden border border-[#B08D57]/20 bg-white/50 relative">
+          <img src="${esc(c.url)}" alt="${esc(c.titulo)}" class="w-full h-32 object-cover" />
+          <p class="text-xs px-2 py-1.5 text-[#5c574d] truncate">${esc(c.titulo)}</p>
+          <button data-action="delete-catalogo" data-id="${c.id}" class="absolute top-1.5 right-1.5 p-1 rounded-md bg-white/90 text-[#7A3B41] border border-[#7A3B41]/30">✕</button>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function renderAdminSenha() {
+  const usuarioAtual = (auth.currentUser?.email || '').split('@')[0];
+  return `
+  <div class="max-w-xs space-y-3">
+    <p class="text-sm text-[#766F63] mb-1">Troque a senha de acesso à Área da Aline (usuário: ${esc(usuarioAtual)}).</p>
+    <div>
+      <label class="text-xs tracking-wide text-[#5c574d] block mb-1">Senha atual</label>
+      <input id="inp-senha-atual" type="password" autocapitalize="none" autocorrect="off" spellcheck="false"
+        class="w-full border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+    </div>
+    <div>
+      <label class="text-xs tracking-wide text-[#5c574d] block mb-1">Nova senha</label>
+      <input id="inp-senha-nova" type="password" autocapitalize="none" autocorrect="off" spellcheck="false"
+        class="w-full border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+    </div>
+    <div>
+      <label class="text-xs tracking-wide text-[#5c574d] block mb-1">Confirmar nova senha</label>
+      <input id="inp-senha-confirma" type="password" autocapitalize="none" autocorrect="off" spellcheck="false"
+        class="w-full border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+    </div>
+    ${state.senhaError ? `<p class="text-sm text-[#7A3B41]">${esc(state.senhaError)}</p>` : ''}
+    ${state.senhaSucesso ? `<p class="text-sm text-[#3E7C42]">${esc(state.senhaSucesso)}</p>` : ''}
+    <button data-action="change-senha" class="w-full border border-[#33312C] px-6 py-2.5 text-sm tracking-wide hover:bg-[#33312C] hover:text-white transition-colors">Salvar nova senha</button>
+  </div>`;
+}
+
+// ======================================================
+// AÇÕES
+// ======================================================
+const actions = {
+  'set-tab': (el) => { state.tab = el.dataset.tab; render(); },
+
+  'select-horario': (el) => { state.formHorario = el.dataset.horario; render(); },
+
+  'submit-book': async () => {
+    state.bookError = '';
+    const nome = (state.formNome || '').trim();
+    const telefone = (state.formTelefone || '').trim();
+    const digits = telefone.replace(/\D/g, '');
+    if (!nome || !telefone || !state.formData || !state.formHorario) {
+      state.bookError = 'Preencha nome, telefone, data e horário.';
+      render();
+      return;
+    }
+    if (digits.length < 10) {
+      state.bookError = 'Informe um telefone válido, com DDD.';
+      render();
+      return;
+    }
+    const conflito = state.agendamentos.find((a) => a.data === state.formData && a.horario === state.formHorario && a.status !== 'cancelado');
+    if (conflito) {
+      state.bookError = 'Esse horário já está reservado. Escolha outro horário.';
+      render();
+      return;
+    }
+    state.booking = true;
+    render();
+    try {
+      const novo = { nome, telefone: digits, data: state.formData, horario: state.formHorario, status: 'pre-agendado', criadoEm: Date.now() };
+      const ref = await addDoc(collection(db, 'agendamentos'), novo);
+      state.bookedInfo = { id: ref.id, ...novo };
+      state.formNome = ''; state.formTelefone = ''; state.formData = ''; state.formHorario = '';
+    } catch (e) {
+      console.error(e);
+      state.bookError = 'Não foi possível salvar seu agendamento agora. Tente novamente.';
+    }
+    state.booking = false;
+    render();
+  },
+
+  'book-again': () => { state.bookedInfo = null; render(); },
+
+  'cal-prev': () => {
+    state.calMonth = state.calMonth === 0 ? 11 : state.calMonth - 1;
+    state.calYear = state.calMonth === 11 ? state.calYear - 1 : state.calYear;
+    render();
+  },
+  'cal-next': () => {
+    state.calMonth = state.calMonth === 11 ? 0 : state.calMonth + 1;
+    state.calYear = state.calMonth === 0 ? state.calYear + 1 : state.calYear;
+    render();
+  },
+  'select-dia': (el) => { state.diaSelecionado = el.dataset.dia; render(); },
+
+  'admin-login': async () => {
+    const usuario = document.getElementById('inp-usuario-login')?.value.trim() || '';
+    const senha = document.getElementById('inp-senha-login')?.value || '';
+    if (!usuario || !senha) {
+      state.passError = 'Preencha usuário e senha.';
+      render();
+      return;
+    }
+    state.loggingIn = true;
+    state.passError = '';
+    render();
+    try {
+      await signInWithEmailAndPassword(auth, usuarioParaEmail(usuario), senha);
+      // onAuthStateChanged cuida de state.adminOn e re-renderiza
+    } catch (e) {
+      state.passError = 'Usuário ou senha incorretos.';
+    }
+    state.loggingIn = false;
+    render();
+  },
+  'admin-logout': async () => { await signOut(auth); },
+  'set-admin-tab': (el) => { state.adminTab = el.dataset.adminTab; render(); },
+
+  'confirm-agendamento': async (el) => {
+    await updateDoc(doc(db, 'agendamentos', el.dataset.id), { status: 'confirmado' });
+  },
+  'delete-agendamento': async (el) => {
+    await deleteDoc(doc(db, 'agendamentos', el.dataset.id));
+  },
+
+  'add-preco': async () => {
+    state.precoError = '';
+    const nome = document.getElementById('inp-novo-produto')?.value.trim();
+    const precoVal = document.getElementById('inp-novo-preco')?.value;
+    if (!nome || !precoVal) {
+      state.precoError = 'Preencha o nome e o preço.';
+      render();
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'precos'), { nome, preco: parseFloat(precoVal), promo: false, precoPromo: null });
+      document.getElementById('inp-novo-produto').value = '';
+      document.getElementById('inp-novo-preco').value = '';
+    } catch (e) {
+      state.precoError = 'Não foi possível salvar. Tente de novo.';
+      render();
+    }
+  },
+  'delete-preco': async (el) => { await deleteDoc(doc(db, 'precos', el.dataset.id)); },
+
+  'add-catalogo': async () => {
+    state.catalogError = '';
+    const url = document.getElementById('inp-foto-url')?.value.trim();
+    const titulo = document.getElementById('inp-foto-titulo')?.value.trim();
+    if (!url) {
+      state.catalogError = 'Cole o link da foto antes de adicionar.';
+      render();
+      return;
+    }
+    state.catalogSaving = true;
+    render();
+    try {
+      await addDoc(collection(db, 'catalogo'), { url, titulo: titulo || 'Trabalho da Aline' });
+    } catch (e) {
+      state.catalogError = 'Não foi possível salvar. Tente de novo.';
+    }
+    state.catalogSaving = false;
+    render();
+  },
+  'delete-catalogo': async (el) => { await deleteDoc(doc(db, 'catalogo', el.dataset.id)); },
+
+  'change-senha': async () => {
+    state.senhaError = '';
+    state.senhaSucesso = '';
+    const atual = document.getElementById('inp-senha-atual')?.value || '';
+    const nova = document.getElementById('inp-senha-nova')?.value || '';
+    const confirma = document.getElementById('inp-senha-confirma')?.value || '';
+    if (!atual) { state.senhaError = 'Informe a senha atual.'; render(); return; }
+    if (nova.trim().length < 6) { state.senhaError = 'A nova senha precisa ter pelo menos 6 caracteres.'; render(); return; }
+    if (nova.trim() !== confirma.trim()) { state.senhaError = 'A confirmação não é igual à nova senha.'; render(); return; }
+    try {
+      const cred = EmailAuthProvider.credential(auth.currentUser.email, atual);
+      await reauthenticateWithCredential(auth.currentUser, cred);
+      await updatePassword(auth.currentUser, nova.trim());
+      state.senhaSucesso = 'Senha alterada com sucesso.';
+    } catch (e) {
+      state.senhaError = 'Não foi possível trocar a senha. Confira a senha atual e tente de novo.';
+    }
+    render();
+  },
+};
+
+const changeActions = {
+  'update-preco-valor': async (el) => {
+    await updateDoc(doc(db, 'precos', el.dataset.id), { preco: parseFloat(el.value) || 0 });
+  },
+  'update-preco-promo': async (el) => {
+    await updateDoc(doc(db, 'precos', el.dataset.id), { precoPromo: parseFloat(el.value) || 0 });
+  },
+  'toggle-promo': async (el) => {
+    await updateDoc(doc(db, 'precos', el.dataset.id), { promo: el.checked });
+  },
+};
+
+appEl.addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const fn = actions[el.dataset.action];
+  if (fn) await fn(el, e);
+});
+
+appEl.addEventListener('input', (e) => {
+  const bind = e.target.dataset.bind;
+  if (bind) state[bind] = e.target.value;
+});
+
+appEl.addEventListener('change', async (e) => {
+  if (e.target.id === 'inp-data') {
+    state.formData = e.target.value;
+    state.formHorario = '';
+    render();
+    return;
+  }
+  const el = e.target.closest('[data-change-action]');
+  if (el) {
+    const fn = changeActions[el.dataset.changeAction];
+    if (fn) await fn(el, e);
+  }
+});
+
+// ======================================================
+// FIRESTORE — assinaturas em tempo real + inicialização
+// ======================================================
+onSnapshot(collection(db, 'precos'), (snap) => {
+  state.precos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  if (state.tab === 'precos' || (state.tab === 'admin' && state.adminTab === 'precos')) render();
+});
+onSnapshot(collection(db, 'catalogo'), (snap) => {
+  state.catalogo = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  if (state.tab === 'catalogo' || (state.tab === 'admin' && state.adminTab === 'catalogo')) render();
+});
+onSnapshot(collection(db, 'agendamentos'), (snap) => {
+  state.agendamentos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  if (state.tab === 'agenda' || (state.tab === 'admin' && state.adminTab === 'agenda') || state.tab === 'agendar') render();
+});
+
+async function bootstrap() {
+  render();
+  try {
+    const precosSnap = await getDocs(collection(db, 'precos'));
+    if (precosSnap.empty) {
+      for (const p of DEFAULT_PRECOS) await addDoc(collection(db, 'precos'), p);
+    }
+  } catch (e) {
+    console.error('Erro ao conectar ao Firebase. Confira o firebaseConfig no topo do arquivo.', e);
+  }
+  state.loading = false;
+  render();
+}
+
+onAuthStateChanged(auth, (user) => {
+  state.adminOn = !!user;
+  render();
+});
+
+bootstrap();
+</script>
+</body>
+</html>
