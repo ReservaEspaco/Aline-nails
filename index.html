@@ -393,7 +393,7 @@ function renderAgendaPublica() {
           return `<button data-action="select-dia" data-dia="${iso}"
             class="aspect-square rounded-md text-xs flex flex-col items-center justify-center gap-0.5 border ${selecionado ? 'bg-[#33312C] text-white border-[#33312C]' : 'border-transparent hover:border-[#B08D57]/40'}">
             <span>${parseInt(iso.slice(-2), 10)}</span>
-            ${(temPre || temConfirmado) ? `<span class="flex gap-0.5">${temPre ? '<span class="w-1 h-1 rounded-full bg-[#C08A2E]"></span>' : ''}${temConfirmado ? '<span class="w-1 h-1 rounded-full bg-[#3E7C42]"></span>' : ''}</span>` : ''}
+            ${(temPre || temConfirmado) ? `<span class="flex gap-1">${temPre ? '<span class="w-2 h-2 rounded-full bg-[#C08A2E]"></span>' : ''}${temConfirmado ? '<span class="w-2 h-2 rounded-full bg-[#3E7C42]"></span>' : ''}</span>` : ''}
           </button>`;
         }).join('')}
       </div>
