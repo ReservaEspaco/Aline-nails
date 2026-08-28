@@ -115,6 +115,39 @@ function waLink(ag) {
   return `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(msg)}`;
 }
 
+// Comprime a foto no navegador e devolve como data URL (string),
+// para guardar direto no Firestore sem precisar de Firebase Storage.
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 640;
+        let w = img.width, h = img.height;
+        if (w > h) { if (w > maxDim) { h = Math.round((h * maxDim) / w); w = maxDim; } }
+        else { if (h > maxDim) { w = Math.round((w * maxDim) / h); h = maxDim; } }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        let quality = 0.72;
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        let tries = 0;
+        while (dataUrl.length > 700000 && tries < 5) {
+          quality = Math.max(0.3, quality - 0.12);
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+          tries++;
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = () => reject(new Error('Não foi possível ler essa imagem.'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('Não foi possível ler esse arquivo.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 // ======================================================
 // ESTADO
 // ======================================================
@@ -483,15 +516,21 @@ function renderAdminPrecos() {
 function renderAdminCatalogo() {
   return `
   <div>
-    <div class="flex flex-wrap gap-2 mb-2">
-      <input id="inp-foto-url" placeholder="Link da foto (URL)"
-        class="flex-1 min-w-[180px] border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
-      <input id="inp-foto-titulo" placeholder="Descrição (opcional)"
-        class="w-40 border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
-      <button data-action="add-catalogo" ${state.catalogSaving ? 'disabled' : ''}
-        class="flex items-center gap-1 border border-[#33312C] px-3 py-2 text-sm hover:bg-[#33312C] hover:text-white disabled:opacity-50">
-        ${state.catalogSaving ? 'Salvando...' : 'Adicionar'}
-      </button>
+    <div class="border border-[#B08D57]/30 rounded-lg p-4 bg-white/40 mb-4">
+      <label class="text-xs tracking-wide text-[#5c574d] block mb-2">Enviar foto do dispositivo</label>
+      <div class="flex flex-wrap gap-2 items-center">
+        <input id="inp-foto-arquivo" type="file" accept="image/*"
+          class="text-sm flex-1 min-w-[180px] border border-[#B08D57]/40 bg-white/70 rounded-md px-2 py-1.5" />
+        <input id="inp-foto-titulo" placeholder="Descrição (opcional)"
+          class="w-40 border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
+        <button data-action="add-catalogo" ${state.catalogSaving ? 'disabled' : ''}
+          class="flex items-center gap-1 border border-[#33312C] px-3 py-2 text-sm hover:bg-[#33312C] hover:text-white disabled:opacity-50">
+          ${state.catalogSaving ? 'Processando...' : 'Adicionar'}
+        </button>
+      </div>
+      <p class="text-[11px] text-[#9a9282] mt-2">Ou, se preferir, cole o link de uma foto já hospedada:</p>
+      <input id="inp-foto-url" placeholder="Link da foto (URL) — opcional se enviar arquivo acima"
+        class="w-full mt-1 border border-[#B08D57]/40 bg-white/70 px-3 py-2 text-sm rounded-md focus:outline-none focus:border-[#B08D57]" />
     </div>
     ${state.catalogError ? `<p class="text-xs text-[#7A3B41] mb-3">${esc(state.catalogError)}</p>` : ''}
     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -641,19 +680,33 @@ const actions = {
 
   'add-catalogo': async () => {
     state.catalogError = '';
-    const url = document.getElementById('inp-foto-url')?.value.trim();
+    const arquivo = document.getElementById('inp-foto-arquivo')?.files?.[0];
+    const urlColada = document.getElementById('inp-foto-url')?.value.trim();
     const titulo = document.getElementById('inp-foto-titulo')?.value.trim();
-    if (!url) {
-      state.catalogError = 'Cole o link da foto antes de adicionar.';
+
+    if (!arquivo && !urlColada) {
+      state.catalogError = 'Envie um arquivo ou cole o link de uma foto.';
       render();
       return;
     }
+
     state.catalogSaving = true;
     render();
     try {
+      let url = urlColada;
+      if (arquivo) {
+        url = await compressImage(arquivo);
+      }
       await addDoc(collection(db, 'catalogo'), { url, titulo: titulo || 'Trabalho da Aline' });
+      const inputArquivo = document.getElementById('inp-foto-arquivo');
+      const inputUrl = document.getElementById('inp-foto-url');
+      const inputTitulo = document.getElementById('inp-foto-titulo');
+      if (inputArquivo) inputArquivo.value = '';
+      if (inputUrl) inputUrl.value = '';
+      if (inputTitulo) inputTitulo.value = '';
     } catch (e) {
-      state.catalogError = 'Não foi possível salvar. Tente de novo.';
+      console.error(e);
+      state.catalogError = e.message || 'Não foi possível processar a foto. Tente de novo.';
     }
     state.catalogSaving = false;
     render();
